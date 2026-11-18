@@ -79,7 +79,7 @@ class SystemService {
       // CMD with stdio:ignore reads EOF and closes before it can be used.
       const argumentsText = `/d /k "title SkyLab SSH - ${host}:${port} & ${sshCmd}"`;
       const script = `$ErrorActionPreference = 'Stop'; Start-Process -FilePath $env:ComSpec -ArgumentList '${argumentsText}' -WindowStyle Normal`;
-      await this._runTerminalLauncher("powershell.exe", [
+      await this._runLauncher("SSH terminal", "powershell.exe", [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -102,7 +102,12 @@ class SystemService {
     }
   }
 
-  private _runTerminalLauncher(command: string, args: string[]): Promise<void> {
+  /** 執行啟動器並等它結束；結束碼不是 0 就視為沒開成功 */
+  private _runLauncher(
+    name: string,
+    command: string,
+    args: string[]
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, {
         windowsHide: true,
@@ -111,7 +116,7 @@ class SystemService {
       child.once("error", reject);
       child.once("exit", code => {
         if (code === 0) resolve();
-        else reject(new Error(`SSH terminal launcher exited ${code}`));
+        else reject(new Error(`${name} launcher exited ${code}`));
       });
     });
   }
@@ -159,7 +164,12 @@ class SystemService {
     }
     await this._checkRdpAvailability(host, port);
     if (process.platform === "darwin") {
-      await shell.openExternal(`rdp://full%20address=s:${target}`);
+      // 不能用 shell.openExternal：Chromium 會把微軟規定的
+      // rdp://full%20address=s:主機:埠（主機段有兩個冒號）判為無效網址，
+      // 還沒交給 RDP 軟體就以 "Invalid URL" 失敗。open 會原樣交給系統處理。
+      await this._runLauncher("RDP client", "/usr/bin/open", [
+        `rdp://full%20address=s:${target}`
+      ]);
       return;
     }
     await this._spawnDetached("xfreerdp", [`/v:${target}`]);

@@ -38,7 +38,11 @@ const bundle = await build({
            getApplicationNameForProtocol: () => globalThis.__systemTest.rdpClient,
            getPath: () => "/nonexistent-home"
          };
-         export const shell = { openExternal: async url => { globalThis.__systemTest.opened.push(url); } };`
+         // 真的 shell.openExternal 會先經 Chromium 解析網址，無效就以 "Invalid URL" 拒絕
+         export const shell = { openExternal: async url => {
+           if (!URL.canParse(url)) throw new Error("Invalid URL");
+           globalThis.__systemTest.opened.push(url);
+         } };`
                 : `import {EventEmitter} from 'node:events';
          export const spawn = (command, args, options) => {
            const child = new EventEmitter(); child.unref = () => {};
@@ -245,12 +249,12 @@ test(
       service.openRdp(3389, "10.10.0.15"),
       error => error.bizCode === "B1022"
     );
-    assert.equal(globalThis.__systemTest.opened.length, 0);
+    assert.equal(globalThis.__systemTest.calls.length, 0);
   }
 );
 
 test(
-  "macOS opens a reachable RDP endpoint through the rdp:// handler",
+  "macOS hands the rdp:// URL to open, because Chromium rejects it as invalid",
   { skip: process.platform !== "darwin" },
   async () => {
     const server = createServer(socket => socket.destroy());
@@ -262,9 +266,38 @@ test(
     } finally {
       await new Promise(resolve => server.close(resolve));
     }
-    assert.deepEqual(globalThis.__systemTest.opened, [
-      `rdp://full%20address=s:127.0.0.1:${port}`
-    ]);
+    assert.deepEqual(
+      globalThis.__systemTest.calls.map(({ command, args }) => ({
+        command,
+        args
+      })),
+      [
+        {
+          command: "/usr/bin/open",
+          args: [`rdp://full%20address=s:127.0.0.1:${port}`]
+        }
+      ]
+    );
+    assert.equal(globalThis.__systemTest.opened.length, 0);
+  }
+);
+
+test(
+  "macOS reports a failed RDP client launch",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const server = createServer(socket => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    globalThis.__systemTest.exitCode = 1;
+    try {
+      await assert.rejects(
+        service.openRdp(server.address().port),
+        /RDP client launcher exited 1/
+      );
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
   }
 );
 
